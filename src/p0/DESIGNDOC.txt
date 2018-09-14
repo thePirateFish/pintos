@@ -1,0 +1,198 @@
+			+-------------------------+
+			|        CS 318           |
+			| PROJECT 0: Getting Real |
+			|     DESIGN DOCUMENT     |
+			+-------------------------+
+				   
+---- AUTHOR ----
+
+Matthew Gigliotti mgiglio1@jhu.edu
+
+---- PRELIMINARIES ----
+
+>> If you have any preliminary comments on your submission, notes for the
+>> TAs, or extra credit, please give them here.
+
+>> Please cite any offline or online sources you consulted while
+>> preparing your submission, other than the Pintos documentation, course
+>> text, lecture notes, and course staff.
+
+			     Booting Pintos
+			     ==============
+
+---- QUESTIONS ---- 
+>> Put the screenshots of Pintos running in src/p0.
+>> A1: Is there any particular issue that you would like us to know?
+Nope.
+			     Debugging
+			     =========
+
+---- QUESTIONS: BIOS ---- 
+>> B1: What is the first instruction that gets executed?
+ljmp   $0x3630,$0xf000e05b
+(ljmp is the first instruction, the rest are the arguments)
+
+ljmp is a long jump to an address in memory, and sets the CS register
+to the first argument (0x3630) and sets the EIP register to the second argument
+which is 32 bits (0xf000e05b).
+
+>> B2: At which physical address is this instruction located?
+
+It is located at 0xffff0, which is near the top of the BIOS ROM area
+in memory.
+
+>> B3: Can you guess why the first instruction is like this?
+
+The PC hardware starts looking for the first instruction in the BIOS ROM area, starting from the top. My guess would be that this is the first occurrence
+of an instruction, but it's not where BIOS actually starts its work. So
+it performs a jump to the address where it wants to start.
+
+>> B4: What are the next three instructions?
+
+0xfe05b:	cmpw   $0x48,%cs:(%esi)
+0xfe062:	jne    0xd241d0ce
+0xfe066:	xor    %edx,%edx
+
+
+---- QUESTIONS: BOOTLOADER ---- 
+>> B5: How does the bootloader read disk sectors? In particular, what BIOS interrupt
+is used?
+
+The read_sector call is defined in the source code as:
+	read_sector:
+		pusha
+		sub %ax, %ax
+		push %ax			# LBA sector number [48:63]
+		push %ax			# LBA sector number [32:47]
+		push %ebx			# LBA sector number [0:31]
+		push %es			# Buffer segment
+		push %ax			# Buffer offset (always 0)
+		push $1				# Number of sectors to read
+		push $16			# Packet size
+		mov $0x42, %ah			# Extended read
+		mov %sp, %si			# DS:SI -> packet
+		int $0x13			# Error code in CF
+		popa				# Pop 16 bytes, preserve flags
+
+, in the disassembled file as:
+	read_sector:
+		pusha
+	    7d1f:	60                   	pusha  
+		sub %ax, %ax
+	    7d20:	29 c0                	sub    %eax,%eax
+		push %ax			# LBA sector number [48:63]
+	    7d22:	50                   	push   %eax
+		push %ax			# LBA sector number [32:47]
+	    7d23:	50                   	push   %eax
+		push %ebx			# LBA sector number [0:31]
+	    7d24:	66 53                	push   %bx
+		push %es			# Buffer segment
+	    7d26:	06                   	push   %es
+		push %ax			# Buffer offset (always 0)
+	    7d27:	50                   	push   %eax
+		push $1				# Number of sectors to read
+	    7d28:	6a 01                	push   $0x1
+		push $16			# Packet size
+	    7d2a:	6a 10                	push   $0x10
+		mov $0x42, %ah			# Extended read
+	    7d2c:	b4 42                	mov    $0x42,%ah
+		mov %sp, %si			# DS:SI -> packet
+	    7d2e:	89 e6                	mov    %esp,%esi
+		int $0x13			# Error code in CF
+	    7d30:	cd 13                	int    $0x13
+		popa				# Pop 16 bytes, preserve flags
+	    7d32:	61                   	popa   
+
+, and in GDB as:
+	0x7c26:	call   0x42727d21   ; this is the instruction call read_sector
+	0x7d1f:	pusha
+	0x7d20:	sub    %eax,%eax
+	0x7d22:	push   %eax
+	0x7d23:	push   %eax
+	0x7d24:	push   %bx
+	0x7d26:	push   %es
+	0x7d27:	push   %eax
+	0x7d28:	push   $0x1
+	0x7d2a:	push   $0x10
+	0x7d2c:	mov    $0x42,%ah
+	0x7d2e:	mov    %esp,%esi
+	0x7d30:	int    $0x13
+	0x7d32:	popa
+
+Interrupt 13 is used (20th in decimal) to read each disk sector. The sector
+that is read is stored at ES:0000 (Extra Segment). Register ah is set to 0x42,
+which indicates it will be an extended read sector operation.
+
+>> B6: How does the bootloader decides whether it finds the Pintos kernel?
+
+In check_partition:
+	check_partition:
+		# Is it an unused partition?
+		cmpl $0, %es:(%si)
+		je next_partition
+
+		# Print [1-4].
+		call putc
+
+		# Is it a Pintos kernel partition?
+		cmpb $0x20, %es:4(%si)
+		jne next_partition
+
+		# Is it a bootable partition?
+		cmpb $0x80, %es:(%si)
+		je load_kernel
+
+the loader checks if the partition is unused, and then checks if it is a 
+Pintos kernel partition. The loader compares the contents at the address space
+offset by 4 bytes from the beginning to see if it is equal to the 8-bit sequence 0x20 (00100000). If it is not, then the loader jumps to the next partition on the disk. It is is equal, then that indicates that the current partition contains a Pintos kernel if it is indeed bootable.
+
+
+>> B7: What happens when the bootloader could not find the Pintos kernel?
+
+The loader checks every partition of every disk that it can find. When it attempts to read a sector and the carry flag gets set after the INT 13 call, 
+then the instruction jc no_such_drive is called, initiating the failure sequence.
+
+	no_such_drive:
+	no_boot_partition:
+		# Didn't find a Pintos kernel partition anywhere, give up.
+		call puts
+		.string "\rNot found\r"
+
+		# Notify BIOS that boot failed.  See [IntrList].
+		int $0x18
+
+Interrupt 18 is called, which BIOS handles by producing an error message that
+says no bootable disk was present.
+
+
+>> B8: At what point does the bootloader transfer control to the Pintos kernel?
+
+Once the kernel is found and read into memory, the bootloader must locate the ELF header containing a pointer to the entry point to the loaded kernel image. 
+
+	mov $0x2000, %ax
+	mov %ax, %es
+	mov %es:0x18, %dx
+	mov %dx, start
+	movw $0x2000, start + 2
+	ljmp *start
+
+The 32-bit address is converted into a 16-bit offset address, and is stored in a register. The loader can't jump to an address stored in a register, though, so the address is moved to the start variable, and the code segment is added to the remaining 2 bytes. Then, the loader jumps to the location pointed to by the start variable.
+
+
+---- QUESTIONS: KERNEL ---- 
+>> B9: Is there any issue in particular that you would like us to know?
+
+			     Kernel Monitor
+			     ==============
+
+---- DATA STRUCTURES ----
+
+>> C1: Copy here the declaration of each new or changed `struct' or
+>> `struct' member, global or static variable, `typedef', or
+>> enumeration.  Identify the purpose of each in 25 words or less.
+
+---- ALGORITHMS ----
+>> C2: Explain how you read and write to the console for the kernel monitor.
+Write to the console using the printf function in stdio.c. 
+
+>> C3: Any additional enhancement you implement?

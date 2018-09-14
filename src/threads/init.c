@@ -133,7 +133,39 @@ pintos_init (void)
     /* Run actions specified on kernel command line. */
     run_actions (argv);
   } else {
-    // TODO: no command line passed to kernel. Run interactively 
+    //acquire_console();
+    int run;
+    char *line;
+    do {
+      printf("CS318> ");
+            
+      line = input_getc();
+      /*int c;
+      char *buffer = malloc(sizeof(char) * 16);
+      int index = 0;
+      while(1) {
+        c = input_getc();
+        if (c=="\n") {
+
+        }
+      }
+      I had figured out how to read a full line into buffer, but didn't have time to implement it. 
+      */
+
+      if (line == "whoami") {
+        printf("\n");
+        printf("Matt Gigliotti\n");
+        run=1;
+      } else if (line == "exit") {
+        run=0;
+      } else {
+        printf("invalid\n");
+        run=1;
+      }
+
+    } while (run);
+
+
   }
 
   /* Finish up. */
